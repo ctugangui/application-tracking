@@ -57,9 +57,12 @@ def create_application(application: ApplicationCreate) -> Application:
 
 
 @app.get("/applications")
-def list_applications() -> list[Application]:
+def list_applications(status: Status | None = None) -> list[Application]:
   with Session(engine) as session:
-    return session.exec(select(Application)).all()
+    statement = select(Application)
+    if status:
+      statement = statement.where(Application.status == status)
+    return session.exec(statement).all()
 
 # define patch endpoint
 @app.patch("/applications/{application_id}")
