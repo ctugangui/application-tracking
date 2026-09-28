@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+from datetime import date
 from enum import StrEnum
 from fastapi import FastAPI, HTTPException
 from sqlmodel import SQLModel, Field, Session, create_engine, select
@@ -11,24 +12,48 @@ class Status(StrEnum):
   REJECTED = "rejected"
   WITHDRAWN = "withdrawn"
 
-# ---- the model ----
+# ---- Event enum ----
+class EventKind(StrEnum):
+  EMAIL = "email"
+  CALL = "call"
+  INTERVIEW = "interview"
+  NOTE = "note"
+
+# ---- the table model ----
 class Application(SQLModel, table=True):
   id: int | None = Field(default=None, primary_key=True)
   company: str
   role: str
   status: Status = Status.APPLIED
+  applied_on: date = Field(default_factory=date.today)
 
-# ---- # Non-table model so FastAPI validates request bodies (table models don't) ----
+# ---- Non-table model so FastAPI validates request bodies (table models don't) ----
 class ApplicationCreate(SQLModel):
   company: str
   role: str
   status: Status = Status.APPLIED
+  applied_on: date = Field(default_factory=date.today)
 
 # define patch schema
 class ApplicationUpdate(SQLModel):
   company: str | None = None
   role: str | None = None
   status: Status | None = None
+  applied_on: date | None = None
+
+# --- Event table ----
+class Event(SQLModel, table=True):
+  id: int | None = Field(default=None, primary_key=True)
+  application_id: int = Field(foreign_key="application.id")
+  occurred_on: date = Field(default_factory=date.today)
+  kind: EventKind
+  note: str | None = None
+
+# ---- event non-table model for validation ----
+class EventCreate(SQLModel):
+  occurred_on: date = Field(default_factory=date.today)
+  kind: EventKind
+  note: str | None = None
 
 # ---- the database ----
 engine = create_engine("sqlite:///applications.db")
@@ -85,3 +110,26 @@ def patch_application(application_id: int, application_update: ApplicationUpdate
     session.refresh(application_item)
 
     return application_item
+
+
+@app.post("/applications/{application_id}/events")
+def create_event(application_id: int, event: EventCreate) -> Event:
+  with Session(engine) as session:
+    # get the application by id application_id pass
+    application_item = session.get(Application, application_id)
+    # if no id, throw 404
+    if not application_item:
+      raise HTTPException(status_code=404, detail="Application not found")
+
+    # convert EventCreate to Event by passing application_id and model_validate
+    db_event = Event.model_validate(event, update={"application_id": application_id})
+
+    #persist
+    # add
+    session.add(db_event)
+    # commit
+    session.commit()
+    # refresh
+    session.refresh(db_event)
+    # return the event
+    return db_event
